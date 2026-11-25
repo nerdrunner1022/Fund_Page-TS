@@ -40,7 +40,9 @@ then narrowed to only the columns that query needs (see
 - API: http://localhost:3000/api
 - Health check: http://localhost:3000/api/health
 
-Set `VITE_API_URL` in `apps/web/.env` if the API is not at `http://localhost:3000/api`.
+On Vercel Services the site calls the API at the same-origin path `/api`. For
+the split local dev servers, create `apps/web/.env` containing
+`VITE_API_URL=http://localhost:3000/api`.
 
 ## Commands
 
@@ -115,16 +117,22 @@ receives donor names, slip links or bank references.
 
 ## Deploying to Vercel
 
-The repo is prepared for **two Vercel projects from the same Git repository**:
+The repo is prepared as **one Vercel project with two Services**, sharing one
+domain:
 
-| Vercel project | Root Directory | Framework preset | What it serves |
+| Service | Source root | Framework | Public path |
 | --- | --- | --- | --- |
-| `zahira-web` | `apps/web` | Vite | The static bilingual site, including `/admin` |
-| `zahira-api` | repository root | Other | The NestJS API as one Node.js function via `api/index.js` |
+| `api` | `apps/api` | NestJS | `/api/*` |
+| `web` | `apps/web` | Vite | Everything else |
 
-`vercel.json` at the repository root builds the API and rewrites every `/api/*`
-request to the Nest application. `apps/web/vercel.json` adds the SPA rewrite so
-`/admin` works on refresh and direct links.
+The root `vercel.json` defines both services, routes `/api/(.*)` to `api`, sends
+all other paths to `web`, and adds an SPA fallback inside `web` so `/admin`
+works on refresh and direct links.
+
+**No service bindings are needed.** The browser calls `/api` on the same public
+domain; that is public routing, not a server-side service-to-service call. The
+static web service has no server runtime in which a binding could resolve. If a
+server-side web/BFF service is added later, declare the binding on that caller.
 
 ### 1. Push the code
 
@@ -132,14 +140,14 @@ This folder is not yet a Git repository. Initialise it, commit, and push it to
 GitHub, GitLab, or Bitbucket before importing it into Vercel. Never commit
 `.env`, `.env.production.local`, or any other secret file.
 
-### 2. Create the API project
+### 2. Create the Vercel project
 
-Import the repository and set **Root Directory** to the repository root. Set
-**Framework Preset** to **Other**. The checked-in `vercel.json` supplies the
-install command (`npm ci`) and build command (`npm run build --workspace apps/api`).
+Import the repository with the **repository root** as the Root Directory. The
+checked-in `vercel.json` enables Services mode and supplies the framework and
+entrypoint for each service.
 
-Add these as **Production** (and, if you want previews, **Preview**) environment
-variables:
+Add these variables at the **project** level (both services can read them) for
+**Production** and, if you want previews, **Preview**:
 
 | Variable | Value |
 | --- | --- |
@@ -149,7 +157,7 @@ variables:
 | `JWT_SECRET` | Fresh random string, at least 32 characters |
 | `ADMIN_EMAIL` | Admin sign-in email |
 | `ADMIN_PASSWORD` | Strong password, at least 12 characters |
-| `CORS_ORIGINS` | Exact public web origin, e.g. `https://fund.example.org` |
+| `CORS_ORIGINS` | Exact public origin, e.g. `https://fund.example.org` |
 | `THROTTLE_LIMIT` | `100` |
 | `TRUST_PROXY` | `true` (Vercel is the trusted proxy) |
 | `DB_SYNCHRONIZE` | `false` |
@@ -159,8 +167,10 @@ variables:
 Startup validation rejects localhost CORS origins, `synchronize`, and the
 in-memory database in production.
 
-Deploy once, then copy the generated API domain (for example
-`https://funding-page-api.vercel.app`).
+Leave `VITE_API_URL` unset: the built site calls `/api` on its own origin. Only
+set it if you deliberately want the browser to call a different API host.
+
+Deploy once. The generated domain serves both the site and the API.
 
 ### 3. Run migrations and seed against Neon
 
@@ -168,7 +178,7 @@ These commands run locally but use the production values from Vercel:
 
 ```powershell
 npx vercel@latest login
-npx vercel@latest link          # choose the zahira-api project
+npx vercel@latest link
 npx vercel@latest env pull .env.production.local --environment=production
 npm ci
 npm run db:migrate
@@ -179,35 +189,13 @@ npm run db:seed                 # idempotent; safe to rerun
 If you rotate the seeded admin password later, delete that admin row in Neon and
 rerun `npm run db:seed`; the seed never overwrites an existing admin.
 
-### 4. Create the web project
+### 4. Verify the launch
 
-Import the same repository again and set **Root Directory** to `apps/web`.
-`apps/web/vercel.json` keeps the Vite preset, installs from the root lockfile,
-builds with `npm run build --workspace=@fund/web`, and serves `dist`. Leave
-**Include files outside the root directory in the Build Step** enabled so that
-the web build can reach the root lockfile.
-
-Add this build-time environment variable:
-
-| Variable | Value |
-| --- | --- |
-| `VITE_API_URL` | The API domain plus `/api`, e.g. `https://funding-page-api.vercel.app/api` |
-| `VITE_CAMPAIGN_SLUG` | Optional; defaults to `zahira-college-land-fund` |
-
-`VITE_API_URL` is compiled into the JavaScript bundle, so changing it requires
-a redeploy. Deploy, then copy the web domain (for example
-`https://funding-page.vercel.app`).
-
-If that web domain differs from the one used in step 2, update `CORS_ORIGINS`
-on the API project and redeploy the API.
-
-### 5. Verify the launch
-
-1. `GET https://<api-domain>/api/health` returns `{"status":"ok"}`.
-2. `GET https://<api-domain>/api/campaigns/zahira-college-land-fund/donations/totals`
+1. `GET https://<domain>/api/health` returns `{"status":"ok"}`.
+2. `GET https://<domain>/api/campaigns/zahira-college-land-fund/donations/totals`
    returns only `{ "raised": "...", "donors": ... }`. Do not publish donor names,
    messages, slips, or bank refs here.
-3. Open `https://<web-domain>/` in English and Tamil. Check the countdown,
+3. Open `https://<domain>/` in English and Tamil. Check the countdown,
    Rs. 48,000,000 goal, progress, account number `066-1-001-0-0036343`, WhatsApp
    flow, and browser console.
 4. Open `/admin`, sign in, and exercise Verify, Reject, Add, Edit, and Delete.
@@ -216,8 +204,9 @@ on the API project and redeploy the API.
 
 ### Custom domains and previews
 
-Add custom domains in the Vercel dashboard, then update `CORS_ORIGINS` (API)
-and `VITE_API_URL` (web) to the final URLs and redeploy both projects. For
-preview deployments, either copy the production variables into the Preview
-environment or add each preview web URL to `CORS_ORIGINS`. The site still does
-not collect money or use payment webhooks.
+Add a custom domain in the Vercel dashboard and update `CORS_ORIGINS` to that
+same origin; no second domain or `VITE_API_URL` change is required. Preview
+deployments automatically get a matching `/api` path on their own domain, but
+set `CORS_ORIGINS` in the Preview environment to the preview origin if you want
+the startup CORS check to match. The site still does not collect money or use
+payment webhooks.

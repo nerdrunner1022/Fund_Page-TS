@@ -3,9 +3,8 @@ import { ConfigService } from '@nestjs/config';
 import helmet from 'helmet';
 
 /**
- * Shared HTTP configuration for both the standalone server and the Vercel
- * serverless handler. Keeping this in one place prevents the two entrypoints
- * from drifting apart.
+ * Shared HTTP configuration for the Nest application. Vercel's NestJS builder
+ * calls the same bootstrap path as the local server, so this stays in one place.
  */
 export function configureApp(app: INestApplication): void {
   const config = app.get(ConfigService);

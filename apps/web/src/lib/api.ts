@@ -1,7 +1,8 @@
 import type { Campaign, CampaignTotals, PendingDonation } from '../types';
 
-export const API_BASE =
-  import.meta.env.VITE_API_URL ?? 'http://localhost:3000/api';
+// On Vercel Services the API is mounted on the same origin at /api. Override
+// this only for the split local dev servers (`npm run dev`).
+export const API_BASE = import.meta.env.VITE_API_URL ?? '/api';
 
 export class ApiError extends Error {
   constructor(
