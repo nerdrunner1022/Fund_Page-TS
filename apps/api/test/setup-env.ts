@@ -1,0 +1,11 @@
+process.env.NODE_ENV = 'test';
+process.env.DATABASE_URL = 'postgres://test:test@localhost:5432/test_fund';
+process.env.JWT_SECRET = 'test-only-secret-at-least-32-characters';
+process.env.ADMIN_EMAIL = 'admin@example.org';
+process.env.ADMIN_PASSWORD = 'a-strong-test-password';
+process.env.CORS_ORIGINS = 'http://localhost:5173';
+process.env.CAMPAIGN_SLUG = 'zahira-college-land-fund';
+process.env.USE_MEMORY_DB = 'true';
+process.env.DB_SYNCHRONIZE = 'false';
+process.env.THROTTLE_LIMIT = '100';
+process.env.THROTTLE_TTL_MS = '60000';
