@@ -8,6 +8,7 @@ import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { CampaignsModule } from './campaigns/campaigns.module';
 import { DatabaseModule } from './database/database.module';
 import { DonationsModule } from './donations/donations.module';
+import { FxModule } from './fx/fx.module';
 import { HealthController } from './health.controller';
 
 @Module({
@@ -31,6 +32,7 @@ import { HealthController } from './health.controller';
     DatabaseModule,
     CampaignsModule,
     DonationsModule,
+    FxModule,
     AdminModule,
   ],
   controllers: [HealthController],

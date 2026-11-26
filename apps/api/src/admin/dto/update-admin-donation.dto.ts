@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { donationCurrencySchema } from '../../common/donation-input';
 import { amountSchema, httpUrl } from './create-admin-donation.dto';
 
 const nullableText = (max: number) => z.string().trim().max(max).nullable();
@@ -6,6 +7,7 @@ const nullableText = (max: number) => z.string().trim().max(max).nullable();
 export const adminUpdateDonationSchema = z
   .object({
     amount: amountSchema.optional(),
+    currency: donationCurrencySchema.optional(),
     donorName: nullableText(120).optional(),
     bankRef: z.string().trim().min(1).max(120).nullable().optional(),
     slipUrl: httpUrl.nullable().optional(),

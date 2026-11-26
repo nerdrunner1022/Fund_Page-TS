@@ -1,4 +1,11 @@
-import type { Campaign, CampaignTotals, PendingDonation } from '../types';
+import type {
+  Campaign,
+  CampaignTotals,
+  FxCurrenciesResponse,
+  FxQuote,
+  PendingDonation,
+  SupportedCurrency,
+} from '../types';
 
 // On Vercel Services the API is mounted on the same origin at /api. Override
 // this only for the split local dev servers (`npm run dev`).
@@ -59,7 +66,12 @@ export const api = {
     request<Campaign>(`/campaigns/${encodeURIComponent(slug)}`),
   createDonation: (
     slug: string,
-    body: { amount: string; donorName?: string; message?: string },
+    body: {
+      amount: string;
+      currency?: SupportedCurrency;
+      donorName?: string;
+      message?: string;
+    },
   ) =>
     request<PendingDonation>(
       `/campaigns/${encodeURIComponent(slug)}/donations`,
@@ -69,4 +81,9 @@ export const api = {
     request<CampaignTotals>(
       `/campaigns/${encodeURIComponent(slug)}/donations/totals`,
     ),
+  getFxCurrencies: () => request<FxCurrenciesResponse>('/fx/currencies'),
+  getFxQuote: (currency: SupportedCurrency, amount: string, signal?: AbortSignal) => {
+    const query = new URLSearchParams({ currency, amount });
+    return request<FxQuote>(`/fx/quote?${query}`, { signal });
+  },
 };

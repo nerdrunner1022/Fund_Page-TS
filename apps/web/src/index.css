@@ -400,8 +400,31 @@ h1 {
   border-radius: 8px;
 }
 
-.give input[aria-invalid="true"] {
+.give input[aria-invalid="true"],
+.give select[aria-invalid="true"] {
   border-color: var(--app-error);
+}
+
+.give .currency-label {
+  margin-bottom: 6px;
+}
+
+.give select.currency-select {
+  display: block;
+  width: 100%;
+  max-width: 340px;
+  margin: 0 0 12px;
+  padding: 11px 12px;
+  min-height: 46px;
+  font: inherit;
+  color: var(--app-ink);
+  background: var(--app-bg);
+  border: 1px solid var(--app-line);
+  border-radius: 8px;
+}
+
+.give .conversion {
+  margin-top: -4px;
 }
 
 .field-error {
@@ -643,6 +666,13 @@ h1 {
   color: var(--app-mute);
   font-weight: 600;
   white-space: nowrap;
+}
+
+.admin-source {
+  display: block;
+  margin-top: 2px;
+  color: var(--app-mute);
+  font-size: 12px;
 }
 
 .admin-actions {

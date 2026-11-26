@@ -11,17 +11,40 @@ describe('Campaign donation flow (e2e)', () => {
   let http: ReturnType<INestApplication['getHttpServer']>;
   let pendingId: string;
   let token: string;
+  let fetchMock: jest.SpyInstance;
 
   const campaignPath = `/api/campaigns/${CAMPAIGN_SLUG}`;
   const donationPath = `${campaignPath}/donations`;
 
   beforeAll(async () => {
+    fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        result: 'success',
+        base_code: 'LKR',
+        rates: {
+          LKR: 1,
+          USD: 0.004,
+          EUR: 0.002,
+          GBP: 0.003,
+          AED: 0.011,
+          SAR: 0.01,
+          QAR: 0.01,
+          CAD: 0.005,
+          AUD: 0.006,
+          INR: 0.35,
+          MYR: 0.018,
+          SGD: 0.005,
+        },
+      }),
+    } as unknown as Response);
     app = await createTestApp();
     await seedTestData(app);
     http = app.getHttpServer();
   });
 
   afterAll(async () => {
+    fetchMock?.mockRestore();
     await app?.close();
   });
 
@@ -35,8 +58,17 @@ describe('Campaign donation flow (e2e)', () => {
     expect(response.body.translations.en.bankAccountNumber).toBe(
       '066-1-001-0-0036343',
     );
+    expect(response.body.translations.en.bankAccountName).toBe(
+      'Past Students Association, T Zahira College Trincomalee',
+    );
+    expect(response.body.translations.en.supportersSecondary).toContain(
+      'Jammiyathul Ulama',
+    );
     expect(response.body.translations.ta.bankAccountNumber).toBe(
       '066-1-001-0-0036343',
+    );
+    expect(response.body.translations.ta.bankAccountName).toBe(
+      'Past Students Association, T Zahira College Trincomalee',
     );
     expect(response.body.translations.ta.school).toContain('ஸாஹிரா');
   });
@@ -59,6 +91,32 @@ describe('Campaign donation flow (e2e)', () => {
       .post(donationPath)
       .send({ amount: '10000000.01' })
       .expect(400);
+    await request(http)
+      .post(donationPath)
+      .send({ amount: '10', currency: 'JPY' })
+      .expect(400);
+  });
+
+  it('quotes live conversions only for allowed currencies', async () => {
+    const currencies = await request(http).get('/api/fx/currencies').expect(200);
+    expect(currencies.body.currencies).toContain('USD');
+    expect(currencies.body.currencies).not.toContain('JPY');
+
+    const quote = await request(http)
+      .get('/api/fx/quote')
+      .query({ currency: 'USD', amount: '10' })
+      .expect(200);
+    expect(quote.body).toEqual({
+      currency: 'USD',
+      sourceAmountMinor: '1000',
+      amountMinor: '250000',
+      rate: '0.004',
+    });
+
+    await request(http)
+      .get('/api/fx/quote')
+      .query({ currency: 'JPY', amount: '10' })
+      .expect(400);
   });
 
   it('records a pending declaration without changing the total', async () => {
@@ -78,6 +136,24 @@ describe('Campaign donation flow (e2e)', () => {
     const totals = await request(http).get(`${donationPath}/totals`).expect(200);
     expect(totals.body).toEqual({ raised: '0', donors: 0 });
     expect(totals.headers['cache-control']).toContain('max-age=30');
+  });
+
+  it('converts a foreign declaration to LKR before saving it', async () => {
+    const response = await request(http)
+      .post(donationPath)
+      .send({ amount: '10', currency: 'USD', donorName: 'Foreign Donor' })
+      .expect(201);
+
+    expect(response.body).toMatchObject({
+      status: 'pending',
+      currency: 'USD',
+      sourceAmountMinor: '1000',
+      amountMinor: '250000',
+      fxRate: '0.004',
+    });
+
+    const totals = await request(http).get(`${donationPath}/totals`).expect(200);
+    expect(totals.body).toEqual({ raised: '0', donors: 0 });
   });
 
   it('requires a bearer token for admin confirmation', async () => {
@@ -134,6 +210,11 @@ describe('Campaign donation flow (e2e)', () => {
     expect(response.body.items[0]).not.toHaveProperty('donorName');
     expect(response.body.items[0]).not.toHaveProperty('bankRef');
     expect(response.body.items[0]).not.toHaveProperty('slipUrl');
+    expect(Object.keys(response.body.items[0]).sort()).toEqual([
+      'amountMinor',
+      'confirmedAt',
+      'id',
+    ]);
     expect(response.body.nextCursor).toBeNull();
   });
 
@@ -396,5 +477,48 @@ describe('Campaign donation flow (e2e)', () => {
     expect(confirmed.body.items.map((item: { id: string }) => item.id)).not.toContain(
       toDelete.id,
     );
+  });
+
+  it('adds and edits foreign-currency transfers with live conversion', async () => {
+    const path = `/api/admin/campaigns/${CAMPAIGN_SLUG}/donations`;
+    const created = await request(http)
+      .post(path)
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        amount: '20',
+        currency: 'USD',
+        donorName: 'FX Donor',
+        bankRef: 'TXN-FX-001',
+      })
+      .expect(201);
+
+    expect(created.body).toMatchObject({
+      status: 'confirmed',
+      currency: 'USD',
+      sourceAmountMinor: '2000',
+      amountMinor: '500000',
+      fxRate: '0.004',
+    });
+    await request(http)
+      .get(`${donationPath}/totals`)
+      .expect(200)
+      .expect(({ body }) => expect(body).toEqual({ raised: '1750000', donors: 5 }));
+
+    const edited = await request(http)
+      .patch(`/api/admin/donations/${created.body.id}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ amount: '30', currency: 'GBP' })
+      .expect(200);
+    expect(edited.body).toMatchObject({
+      currency: 'GBP',
+      sourceAmountMinor: '3000',
+      amountMinor: '1000000',
+      fxRate: '0.003',
+    });
+
+    await request(http)
+      .get(`${donationPath}/totals`)
+      .expect(200)
+      .expect(({ body }) => expect(body).toEqual({ raised: '2250000', donors: 5 }));
   });
 });

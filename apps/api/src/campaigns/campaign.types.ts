@@ -24,6 +24,7 @@ export interface CampaignCopy {
   whatsappNote: string;
   message: string;
   supporters: string;
+  supportersSecondary: string;
 }
 
 export interface CampaignTranslations {

@@ -28,6 +28,7 @@ function LoadedCampaign({ campaign }: { campaign: Campaign }) {
       />
       <HowToDonate campaign={campaign} />
       <p className="sup">{copy.supporters}</p>
+      <p className="sup">{copy.supportersSecondary}</p>
     </>
   );
 }

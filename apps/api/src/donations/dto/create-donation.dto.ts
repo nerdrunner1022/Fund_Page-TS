@@ -1,10 +1,14 @@
 import { z } from 'zod';
+import {
+  currencyAmountSchema,
+  donationCurrencySchema,
+} from '../../common/donation-input';
+import type { SupportedCurrency } from '../../fx/fx.types';
 
 export const createDonationSchema = z
   .object({
-    amount: z.string().regex(/^\d{1,9}(\.\d{1,2})?$/, {
-      message: 'Enter an amount from Rs. 1 to Rs. 10,000,000.',
-    }),
+    amount: currencyAmountSchema,
+    currency: donationCurrencySchema.default('LKR'),
     donorName: z.string().trim().min(1).max(120).optional(),
     message: z.string().trim().max(500).optional(),
   })
@@ -16,6 +20,9 @@ export interface PendingDonationResponse {
   id: string;
   referenceCode: string;
   amountMinor: string;
+  currency: SupportedCurrency;
+  sourceAmountMinor: string;
+  fxRate: string;
   donorName: string | null;
   status: 'pending';
   createdAt: string;
@@ -43,6 +50,9 @@ export interface AdminDonationResponse {
   referenceCode: string;
   donorName: string | null;
   amountMinor: string;
+  currency: SupportedCurrency;
+  sourceAmountMinor: string;
+  fxRate: string;
   bankRef: string | null;
   slipUrl: string | null;
   donatedOn: string | null;

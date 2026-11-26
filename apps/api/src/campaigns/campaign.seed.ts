@@ -24,8 +24,8 @@ export const CAMPAIGN_TRANSLATIONS: CampaignTranslations = {
     funded: 'funded',
     howHeading: 'How to donate',
     howBody:
-      'Any amount helps. Transfer to T/T ZAHIRA COLLEGE TRINCOMALEE, People’s Bank, Trincomalee Branch. Then send your transfer slip and your name on WhatsApp.',
-    bankAccountName: 'T/T ZAHIRA COLLEGE TRINCOMALEE',
+      'Any amount helps. Transfer to Past Students Association, T Zahira College Trincomalee, People’s Bank, Trincomalee Branch. Then send your transfer slip and your name on WhatsApp.',
+    bankAccountName: 'Past Students Association, T Zahira College Trincomalee',
     bankAccountNumber: '066-1-001-0-0036343',
     bankName: "People's Bank",
     bankBranch: 'Trincomalee Branch',
@@ -38,6 +38,7 @@ export const CAMPAIGN_TRANSLATIONS: CampaignTranslations = {
     message:
       'Assalamu alaikum. I have donated {a} to the Zahira College land fund. Name: {n}. Transfer slip attached.',
     supporters: 'Supported by the Federation of Jumma Mosques, Trincomalee.',
+    supportersSecondary: 'Supported by Jammiyathul Ulama, Trincomalee Branch.',
   },
   ta: {
     school: 'ஸாஹிரா கல்லூரி, திருகோணமலை',
@@ -55,8 +56,8 @@ export const CAMPAIGN_TRANSLATIONS: CampaignTranslations = {
     funded: 'நிறைவு',
     howHeading: 'நன்கொடை வழங்குவது எப்படி',
     howBody:
-      'எந்தத் தொகையும் உதவும். T/T ZAHIRA COLLEGE TRINCOMALEE கணக்கிற்கு, மக்கள் வங்கி திருகோணமலைக் கிளையில் பணம் அனுப்புங்கள். பின்னர் பற்றுச்சீட்டையும் உங்கள் பெயரையும் WhatsApp இல் அனுப்புங்கள்.',
-    bankAccountName: 'T/T ZAHIRA COLLEGE TRINCOMALEE',
+      'எந்தத் தொகையும் உதவும். Past Students Association, T Zahira College Trincomalee கணக்கிற்கு, மக்கள் வங்கி திருகோணமலைக் கிளையில் பணம் அனுப்புங்கள். பின்னர் பற்றுச்சீட்டையும் உங்கள் பெயரையும் WhatsApp இல் அனுப்புங்கள்.',
+    bankAccountName: 'Past Students Association, T Zahira College Trincomalee',
     bankAccountNumber: '066-1-001-0-0036343',
     bankName: 'மக்கள் வங்கி',
     bankBranch: 'திருகோணமலைக் கிளை',
@@ -69,5 +70,6 @@ export const CAMPAIGN_TRANSLATIONS: CampaignTranslations = {
     message:
       'அஸ்ஸலாமு அலைக்கும். ஸாஹிரா கல்லூரி காணி நிதிக்கு {a} வழங்கினேன். பெயர்: {n}. பற்றுச்சீட்டு இணைக்கப்பட்டுள்ளது.',
     supporters: 'ஜும்ஆ பள்ளிவாசல்கள் சம்மேளனம், திருகோணமலை ஆதரவுடன்.',
+    supportersSecondary: 'ஜம்மியத்துல் உலமா, திருகோணமலை கிளை ஆதரவுடன்.',
   },
 };

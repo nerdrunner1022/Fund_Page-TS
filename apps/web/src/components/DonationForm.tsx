@@ -4,20 +4,27 @@ import {
   useState,
   type MouseEvent,
 } from 'react';
+import { useFxCurrencies } from '../hooks/useFxCurrencies';
+import { useFxQuote } from '../hooks/useFxQuote';
 import { useI18n } from '../providers/I18nProvider';
 import { api } from '../lib/api';
-import { formatMajor, isValidAmount } from '../lib/money';
+import {
+  CURRENCY_LABELS,
+  formatEnteredAmount,
+} from '../lib/currency';
+import { formatMajor, formatRupees, isValidAmount } from '../lib/money';
 import {
   buildWhatsAppUrl,
   formatPhone,
   SECONDARY_WHATSAPP_NUMBERS,
 } from '../lib/wa';
-import type { CampaignCopy } from '../types';
+import type { CampaignCopy, SupportedCurrency } from '../types';
 
 const QUICK_AMOUNTS = [1000, 5000, 10000, 25000, 100000];
 
 interface FieldErrors {
   amount?: string;
+  currency?: string;
   name?: string;
 }
 
@@ -33,7 +40,13 @@ export function DonationForm({
   whatsappNumber: string;
 }) {
   const { t } = useI18n();
+  const currencies = useFxCurrencies();
   const [amount, setAmount] = useState('');
+  const [currency, setCurrency] = useState<SupportedCurrency>('LKR');
+  const { quote, error: fxError, loading: fxLoading } = useFxQuote(
+    amount,
+    currency,
+  );
   const [name, setName] = useState('');
   const [errors, setErrors] = useState<FieldErrors>({});
   const [status, setStatus] = useState<SaveStatus>('idle');
@@ -49,7 +62,15 @@ export function DonationForm({
       next.amount = t.amountRequired;
     } else if (!isValidAmount(trimmed)) {
       next.amount =
-        Number(trimmed) > 10_000_000 ? t.amountOutOfRange : t.amountInvalid;
+        Number(trimmed) > 10_000_000
+          ? currency === 'LKR'
+            ? t.amountOutOfRange
+            : t.amountRange
+          : currency === 'LKR'
+            ? t.amountInvalid
+            : t.amountInvalidGeneric;
+    } else if (currency !== 'LKR' && !quote) {
+      next.currency = fxLoading ? t.converting : fxError ?? t.conversionNote;
     }
 
     if (name.trim().length > 120) {
@@ -60,14 +81,21 @@ export function DonationForm({
   }
 
   const message = useMemo(() => {
-    const amountLabel = isValidAmount(amount.trim())
-      ? formatMajor(Number(amount))
-      : '...';
+    let amountLabel = '...';
+    if (isValidAmount(amount.trim())) {
+      if (currency === 'LKR') {
+        amountLabel = formatMajor(Number(amount));
+      } else if (quote) {
+        amountLabel = `${formatEnteredAmount(amount.trim(), currency)} (≈ ${formatRupees(quote.amountMinor)})`;
+      } else {
+        amountLabel = formatEnteredAmount(amount.trim(), currency);
+      }
+    }
     const base = copy.message
       .replace('{a}', amountLabel)
       .replace('{n}', name.trim() || '...');
     return reference ? `${base} Ref: ${reference}.` : base;
-  }, [amount, name, copy.message, reference]);
+  }, [amount, currency, quote, name, copy.message, reference]);
 
   const href = useMemo(
     () => buildWhatsAppUrl(whatsappNumber, message),
@@ -110,6 +138,7 @@ export function DonationForm({
     void api
       .createDonation(slug, {
         amount: amount.trim(),
+        currency,
         ...(name.trim() ? { donorName: name.trim() } : {}),
       })
       .then((response) => {
@@ -129,12 +158,45 @@ export function DonationForm({
 
   const errorItems = [
     errors.amount ? { id: 'amtin', message: errors.amount } : null,
+    errors.currency ? { id: 'curin', message: errors.currency } : null,
     errors.name ? { id: 'namein', message: errors.name } : null,
   ].filter((item): item is { id: string; message: string } => item !== null);
 
   return (
     <div className="give">
       <label htmlFor="amtin">{copy.chooseAmount}</label>
+
+      <label htmlFor="curin" className="currency-label">
+        {t.currencyLabel}
+      </label>
+      <select
+        id="curin"
+        className="currency-select"
+        value={currency}
+        onChange={(event) => {
+          setCurrency(event.target.value as SupportedCurrency);
+          setReference(null);
+          setStatus('idle');
+          setErrors((current) => ({
+            ...current,
+            amount: undefined,
+            currency: undefined,
+          }));
+        }}
+        aria-invalid={errors.currency ? true : undefined}
+        aria-describedby={errors.currency ? 'cur-error' : undefined}
+      >
+        {currencies.map((code) => (
+          <option key={code} value={code}>
+            {CURRENCY_LABELS[code]}
+          </option>
+        ))}
+      </select>
+      {errors.currency && (
+        <p className="field-error" id="cur-error">
+          {errors.currency}
+        </p>
+      )}
 
       {errorItems.length > 0 && (
         <div
@@ -162,7 +224,13 @@ export function DonationForm({
             type="button"
             onClick={() => {
               setAmount(String(value));
-              setErrors((current) => ({ ...current, amount: undefined }));
+              setReference(null);
+              setStatus('idle');
+              setErrors((current) => ({
+                ...current,
+                amount: undefined,
+                currency: undefined,
+              }));
             }}
             aria-pressed={amount === String(value)}
           >
@@ -182,14 +250,40 @@ export function DonationForm({
         placeholder={copy.amountPlaceholder}
         onChange={(event) => {
           setAmount(event.target.value);
-          setErrors((current) => ({ ...current, amount: undefined }));
+          setReference(null);
+          setStatus('idle');
+          setErrors((current) => ({
+            ...current,
+            amount: undefined,
+            currency: undefined,
+          }));
         }}
         aria-invalid={errors.amount ? true : undefined}
-        aria-describedby={errors.amount ? 'amt-error' : undefined}
+        aria-describedby={
+          errors.amount
+            ? 'amt-error fx-note'
+            : isValidAmount(amount.trim())
+              ? 'fx-note'
+              : undefined
+        }
       />
       {errors.amount && (
         <p className="field-error" id="amt-error">
           {errors.amount}
+        </p>
+      )}
+      {isValidAmount(amount.trim()) && (
+        <p className="note conversion" id="fx-note" aria-live="polite">
+          {currency !== 'LKR' && fxLoading
+            ? t.converting
+            : currency !== 'LKR' && fxError
+              ? fxError
+              : currency !== 'LKR' && quote
+                ? t.convertedEstimate.replace(
+                    '{amount}',
+                    formatRupees(quote.amountMinor),
+                  )
+                : t.conversionNote}
         </p>
       )}
 

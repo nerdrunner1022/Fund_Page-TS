@@ -13,7 +13,13 @@ export interface UiStrings {
   errorSummaryTitle: string;
   amountRequired: string;
   amountInvalid: string;
+  amountInvalidGeneric: string;
   amountOutOfRange: string;
+  amountRange: string;
+  currencyLabel: string;
+  convertedEstimate: string;
+  converting: string;
+  conversionNote: string;
   nameTooLong: string;
   recording: string;
   recorded: string;
@@ -42,7 +48,14 @@ export const UI: Record<Lang, UiStrings> = {
     errorSummaryTitle: 'There is a problem',
     amountRequired: 'Enter an amount to send with your slip.',
     amountInvalid: 'Enter the amount in rupees, for example 5000 or 2500.50.',
+    amountInvalidGeneric: 'Enter the amount, for example 5000 or 2500.50.',
     amountOutOfRange: 'Enter an amount from Rs. 1 to Rs. 10,000,000.',
+    amountRange: 'Enter an amount from 1 to 10,000,000.',
+    currencyLabel: 'Donation currency',
+    convertedEstimate: 'About {amount} will be credited in rupees.',
+    converting: 'Checking the live rate…',
+    conversionNote:
+      'The bank account is in rupees. The converted amount is an estimate based on today’s live rate.',
     nameTooLong: 'Keep your name under 120 characters.',
     recording: 'Saving your declaration…',
     recorded: 'Declaration saved. Your reference is {ref}.',
@@ -69,7 +82,14 @@ export const UI: Record<Lang, UiStrings> = {
     errorSummaryTitle: 'சிக்கல் உள்ளது',
     amountRequired: 'பற்றுச்சீட்டுடன் அனுப்பும் தொகையை உள்ளிடவும்.',
     amountInvalid: 'ரூபாயில் தொகையை உள்ளிடவும், எடுத்துக்காட்டு 5000 அல்லது 2500.50.',
+    amountInvalidGeneric: 'தொகையை உள்ளிடவும், எடுத்துக்காட்டு 5000 அல்லது 2500.50.',
     amountOutOfRange: 'ரூ. 1 முதல் ரூ. 1 கோடி வரை தொகையை உள்ளிடவும்.',
+    amountRange: '1 முதல் 1 கோடி வரை தொகையை உள்ளிடவும்.',
+    currencyLabel: 'நன்கொடை நாணயம்',
+    convertedEstimate: 'ரூபாயில் சுமார் {amount} வரவு வைக்கப்படும்.',
+    converting: 'நேரடி விகிதம் சரிபார்க்கப்படுகிறது…',
+    conversionNote:
+      'வங்கி கணக்கு ரூபாயில் உள்ளது. மாற்றப்பட்ட தொகை இன்றைய நேரடி விகிதத்தின் அடிப்படையில் ஒரு மதிப்பீடு.',
     nameTooLong: 'உங்கள் பெயரை 120 எழுத்துகளுக்குள் வைக்கவும்.',
     recording: 'உங்கள் அறிவிப்பு சேமிக்கப்படுகிறது…',
     recorded: 'அறிவிப்பு சேமிக்கப்பட்டது. உங்கள் குறியீடு {ref}.',

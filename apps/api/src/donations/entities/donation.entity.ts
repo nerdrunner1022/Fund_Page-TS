@@ -37,6 +37,17 @@ export class Donation {
   @Column({ name: 'amount_minor', type: 'bigint' })
   amountMinor: string;
 
+  // What the donor entered; amountMinor is always the converted LKR value.
+  @Column({ type: 'text', default: 'LKR' })
+  currency: string;
+
+  @Column({ name: 'source_amount_minor', type: 'bigint', default: '0' })
+  sourceAmountMinor: string;
+
+  // LKR per one source-currency unit at the time of declaration.
+  @Column({ name: 'fx_rate', type: 'text', default: '1' })
+  fxRate: string;
+
   // Bank statement reference. Unique so the same transfer cannot be counted twice.
   @Column({ name: 'bank_ref', type: 'text', nullable: true, unique: true })
   bankRef: string | null;

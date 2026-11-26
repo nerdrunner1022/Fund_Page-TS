@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { useFxCurrencies } from '../hooks/useFxCurrencies';
+import { useFxQuote } from '../hooks/useFxQuote';
+import { CURRENCY_LABELS, formatMinorAmount } from '../lib/currency';
 import { formatRupees } from '../lib/money';
 import { useI18n } from '../providers/I18nProvider';
-import type { AdminDonation, DonationStatus, Lang } from '../types';
+import type {
+  AdminDonation,
+  DonationStatus,
+  Lang,
+  SupportedCurrency,
+} from '../types';
 import {
   adminApi,
   clearToken,
@@ -23,6 +31,8 @@ interface Labels {
   declined: string;
   addTitle: string;
   amount: string;
+  currency: string;
+  converted: string;
   donorName: string;
   bankRef: string;
   slipUrl: string;
@@ -66,7 +76,9 @@ const LABELS: Record<Lang, Labels> = {
     confirmed: 'Verified',
     declined: 'Rejected',
     addTitle: 'Add a transfer already seen on the statement',
-    amount: 'Amount (Rs.)',
+    amount: 'Amount',
+    currency: 'Currency',
+    converted: 'About {amount} in rupees',
     donorName: 'Donor name (optional)',
     bankRef: 'Bank reference',
     slipUrl: 'Slip link (optional)',
@@ -108,7 +120,9 @@ const LABELS: Record<Lang, Labels> = {
     confirmed: 'சரிபார்க்கப்பட்டது',
     declined: 'நிராகரிக்கப்பட்டது',
     addTitle: 'வங்கி கணக்கில் காணப்பட்ட பரிமாற்றத்தைச் சேர்',
-    amount: 'தொகை (ரூ.)',
+    amount: 'தொகை',
+    currency: 'நாணயம்',
+    converted: 'ரூபாயில் சுமார் {amount}',
     donorName: 'நன்கொடையாளர் (விரும்பினால்)',
     bankRef: 'வங்கி குறிப்பு',
     slipUrl: 'ரசீது இணைப்பு (விரும்பினால்)',
@@ -146,6 +160,7 @@ interface EditDraft {
   id: string;
   referenceCode: string;
   amount: string;
+  currency: SupportedCurrency;
   donorName: string;
   bankRef: string;
   slipUrl: string;
@@ -174,8 +189,9 @@ function formatDate(value: string): string {
 }
 
 export function AdminApp() {
-  const { lang } = useI18n();
+  const { lang, t } = useI18n();
   const l = LABELS[lang];
+  const currencies = useFxCurrencies();
   const [token, setToken] = useState<string | null>(() => getToken());
   const [status, setStatus] = useState<DonationStatus>('pending');
   const [items, setItems] = useState<AdminDonation[]>([]);
@@ -187,6 +203,7 @@ export function AdminApp() {
   const [password, setPassword] = useState('');
   const [manual, setManual] = useState<ManualDonationInput>({
     amount: '',
+    currency: 'LKR',
     donorName: '',
     bankRef: '',
     slipUrl: '',
@@ -194,6 +211,8 @@ export function AdminApp() {
   });
   const [editing, setEditing] = useState<EditDraft | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const manualFx = useFxQuote(manual.amount, manual.currency ?? 'LKR');
+  const editFx = useFxQuote(editing?.amount ?? '', editing?.currency ?? 'LKR');
 
   const load = useCallback(async () => {
     if (!getToken()) return;
@@ -260,12 +279,19 @@ export function AdminApp() {
 
   async function handleManual(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if ((manual.currency ?? 'LKR') !== 'LKR' && !manualFx.quote) {
+      setError(
+        manualFx.loading ? t.converting : manualFx.error ?? t.conversionNote,
+      );
+      return;
+    }
     setBusy(true);
     setError(null);
     setNotice(null);
     try {
       const input: ManualDonationInput = {
         amount: manual.amount.trim(),
+        currency: manual.currency ?? 'LKR',
         ...(manual.donorName?.trim()
           ? { donorName: manual.donorName.trim() }
           : {}),
@@ -276,6 +302,7 @@ export function AdminApp() {
       await adminApi.addManual(input);
       setManual({
         amount: '',
+        currency: 'LKR',
         donorName: '',
         bankRef: '',
         slipUrl: '',
@@ -297,7 +324,8 @@ export function AdminApp() {
     setEditing({
       id: donation.id,
       referenceCode: donation.referenceCode,
-      amount: majorAmount(donation.amountMinor),
+      amount: majorAmount(donation.sourceAmountMinor ?? donation.amountMinor),
+      currency: (donation.currency ?? 'LKR') as SupportedCurrency,
       donorName: donation.donorName ?? '',
       bankRef: donation.bankRef ?? '',
       slipUrl: donation.slipUrl ?? '',
@@ -310,12 +338,17 @@ export function AdminApp() {
   async function handleEdit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!editing) return;
+    if (editing.currency !== 'LKR' && !editFx.quote) {
+      setError(editFx.loading ? t.converting : editFx.error ?? t.conversionNote);
+      return;
+    }
     setBusy(true);
     setError(null);
     setNotice(null);
     try {
       const input: DonationUpdateInput = {
         amount: editing.amount.trim(),
+        currency: editing.currency,
         status: editing.status,
         donorName: editing.donorName.trim() || null,
         bankRef: editing.bankRef.trim() || null,
@@ -420,6 +453,37 @@ export function AdminApp() {
                 />
               </label>
               <label>
+                <span>{l.currency}</span>
+                <select
+                  value={manual.currency ?? 'LKR'}
+                  onChange={(event) =>
+                    setManual({
+                      ...manual,
+                      currency: event.target.value as SupportedCurrency,
+                    })
+                  }
+                >
+                  {currencies.map((code) => (
+                    <option key={code} value={code}>
+                      {CURRENCY_LABELS[code]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {(manual.currency ?? 'LKR') !== 'LKR' && (
+                <p className="note admin-span" role="status">
+                  {manualFx.loading
+                    ? t.converting
+                    : manualFx.error ??
+                      (manualFx.quote
+                        ? l.converted.replace(
+                            '{amount}',
+                            formatRupees(manualFx.quote.amountMinor),
+                          )
+                        : '')}
+                </p>
+              )}
+              <label>
                 <span>{l.donorName}</span>
                 <input
                   value={manual.donorName ?? ''}
@@ -482,6 +546,37 @@ export function AdminApp() {
                     }
                   />
                 </label>
+                <label>
+                  <span>{l.currency}</span>
+                  <select
+                    value={editing.currency}
+                    onChange={(event) =>
+                      setEditing({
+                        ...editing,
+                        currency: event.target.value as SupportedCurrency,
+                      })
+                    }
+                  >
+                    {currencies.map((code) => (
+                      <option key={code} value={code}>
+                        {CURRENCY_LABELS[code]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {editing.currency !== 'LKR' && (
+                  <p className="note admin-span" role="status">
+                    {editFx.loading
+                      ? t.converting
+                      : editFx.error ??
+                        (editFx.quote
+                          ? l.converted.replace(
+                              '{amount}',
+                              formatRupees(editFx.quote.amountMinor),
+                            )
+                          : '')}
+                  </p>
+                )}
                 <label>
                   <span>{l.status}</span>
                   <select
@@ -612,6 +707,14 @@ export function AdminApp() {
                         </td>
                         <td data-label={l.amount}>
                           {formatRupees(donation.amountMinor)}
+                          {donation.currency !== 'LKR' && (
+                            <span className="admin-source">
+                              {formatMinorAmount(
+                                donation.sourceAmountMinor ?? donation.amountMinor,
+                                donation.currency,
+                              )}
+                            </span>
+                          )}
                         </td>
                         <td data-label={l.bank}>{donation.bankRef ?? '—'}</td>
                         <td data-label={l.date}>

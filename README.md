@@ -66,6 +66,8 @@ Automated tests do not need Docker: the e2e suite injects a fresh `pg-mem` datab
 | `POST` | `/api/campaigns/:slug/donations` | public | Create a **pending** declaration and reference code (rate limited) |
 | `GET` | `/api/campaigns/:slug/donations/totals` | public | Only `{ raised, donors }` for verified donations; cached 30s |
 | `GET` | `/api/campaigns/:slug/donations` | public | Verified donations as `{ id, amountMinor, confirmedAt }`, cursor paginated |
+| `GET` | `/api/fx/currencies` | public | Currency codes accepted by the donation forms |
+| `GET` | `/api/fx/quote?currency=USD&amount=10` | public | Live rate preview only (rate limited, no-store) |
 | `POST` | `/api/admin/auth/login` | public | Exchange admin credentials for a JWT |
 | `GET` | `/api/admin/campaigns/:slug/donations` | JWT | List donations by status, including bank ref and slip link |
 | `POST` | `/api/admin/campaigns/:slug/donations` | JWT | Add a verified transfer from the bank statement or WhatsApp slip |
@@ -79,6 +81,22 @@ JavaScript's safe integer range cannot be corrupted. Donations are limited to
 Rs. 1 – Rs. 10,000,000. Confirmation uses a conditional status update inside a
 transaction, so concurrent requests cannot double-count a donation. `bank_ref` is
 unique, so the same bank transfer cannot be entered twice.
+
+## Alternate currencies
+
+Both the public form and the admin add/edit forms accept `LKR`, `USD`, `GBP`, `EUR`,
+`AED`, `SAR`, `QAR`, `CAD`, `AUD`, `INR`, `MYR` and `SGD`. The preview calls
+`GET /api/fx/quote`, which fetches rates from the fixed URL
+`https://open.er-api.com/v6/latest/LKR` (5 second timeout, cached for 10 minutes).
+The server repeats the conversion on submission: `amountMinor` is **always LKR**
+and is the only value counted towards the campaign, while `currency`,
+`sourceAmountMinor` and `fxRate` are stored as audit fields. Conversions use exact
+integer arithmetic and are rejected if the rupee result is outside
+Rs. 1 – Rs. 10,000,000. The provider URL is hardcoded, so user input cannot be used
+for outbound requests. If rates are unavailable, LKR donations still work and the
+foreign-currency forms block until a live quote succeeds. Apply
+`AddCurrencyConversion1710000000200` with `npm run db:migrate` before deploying code
+that writes these columns.
 
 ## Admin review
 
@@ -114,6 +132,9 @@ receives donor names, slip links or bank references.
   the totals query can use a SELECT-only Neon role via `READONLY_DATABASE_URL`.
 - The totals result is cached in the API for 30 seconds (also sent as `Cache-Control`) so
   periodic browser polling does not hit Neon on every request.
+- Currency codes are allowlisted by a Zod enum; the rate provider URL is fixed and its
+  response is validated. Conversion is rechecked server-side on every write, never
+  trusted from the browser preview.
 
 ## Deploying to Vercel
 

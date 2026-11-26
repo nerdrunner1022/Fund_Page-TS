@@ -1,6 +1,10 @@
 import { API_BASE } from '../lib/api';
 import { CAMPAIGN_SLUG } from '../hooks/useCampaign';
-import type { AdminDonationPage, DonationStatus } from '../types';
+import type {
+  AdminDonationPage,
+  DonationStatus,
+  SupportedCurrency,
+} from '../types';
 
 const TOKEN_KEY = 'zahira_admin_token';
 
@@ -56,6 +60,7 @@ async function adminRequest<T>(path: string, init: RequestInit = {}): Promise<T>
 
 export interface ManualDonationInput {
   amount: string;
+  currency?: SupportedCurrency;
   donorName?: string;
   bankRef?: string;
   slipUrl?: string;
@@ -64,6 +69,7 @@ export interface ManualDonationInput {
 
 export interface DonationUpdateInput {
   amount: string;
+  currency?: SupportedCurrency;
   status: DonationStatus;
   donorName: string | null;
   bankRef: string | null;

@@ -2,15 +2,24 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from '../lib/api';
 import { I18nProvider } from '../providers/I18nProvider';
-import type { CampaignCopy } from '../types';
+import {
+  SUPPORTED_CURRENCIES,
+  type CampaignCopy,
+} from '../types';
 import { DonationForm } from './DonationForm';
 
 vi.mock('../lib/api', () => ({
-  api: { createDonation: vi.fn() },
+  api: {
+    createDonation: vi.fn(),
+    getFxCurrencies: vi.fn(),
+    getFxQuote: vi.fn(),
+  },
   ApiError: class ApiError extends Error {},
 }));
 
 const createDonation = vi.mocked(api.createDonation);
+const getFxCurrencies = vi.mocked(api.getFxCurrencies);
+const getFxQuote = vi.mocked(api.getFxQuote);
 
 const copy = {
   chooseAmount: 'Choose any amount',
@@ -39,10 +48,22 @@ describe('DonationForm', () => {
   beforeEach(() => {
     openedLinks = [];
     createDonation.mockReset();
+    getFxCurrencies.mockReset();
+    getFxQuote.mockReset();
+    getFxCurrencies.mockResolvedValue({ currencies: [...SUPPORTED_CURRENCIES] });
+    getFxQuote.mockResolvedValue({
+      currency: 'USD',
+      sourceAmountMinor: '1000',
+      amountMinor: '250000',
+      rate: '0.004',
+    });
     createDonation.mockResolvedValue({
       id: '1',
       referenceCode: 'ZCLF-ABC23',
       amountMinor: '500000',
+      currency: 'LKR',
+      sourceAmountMinor: '500000',
+      fxRate: '1',
       donorName: null,
       status: 'pending',
       createdAt: new Date().toISOString(),
@@ -57,10 +78,14 @@ describe('DonationForm', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
-  it('blocks invalid amounts before opening WhatsApp', () => {
+  it('blocks invalid amounts before opening WhatsApp', async () => {
     renderForm();
+    await waitFor(() =>
+      expect(screen.getByRole('option', { name: 'LKR (Rs.)' })).toBeTruthy(),
+    );
     const cta = screen.getByRole('link', { name: copy.sendSlip });
 
     fireEvent.click(cta);
@@ -72,7 +97,7 @@ describe('DonationForm', () => {
     );
   });
 
-  it('records a declaration and opens WhatsApp with the reference', async () => {
+  it('records a rupee declaration and opens WhatsApp with the reference', async () => {
     renderForm();
 
     fireEvent.change(screen.getByLabelText(copy.chooseAmount, { selector: 'input' }), {
@@ -86,6 +111,7 @@ describe('DonationForm', () => {
     await waitFor(() => {
       expect(createDonation).toHaveBeenCalledWith('zahira-college-land-fund', {
         amount: '5000',
+        currency: 'LKR',
         donorName: 'Test Donor',
       });
     });
@@ -95,6 +121,43 @@ describe('DonationForm', () => {
       const url = decodeURIComponent(openedLinks[0]);
       expect(url).toContain('https://wa.me/94772976911');
       expect(url).toContain('Rs. 5,000');
+      expect(url).toContain('Ref: ZCLF-ABC23');
+    });
+  });
+
+  it('previews a live conversion and records the foreign declaration', async () => {
+    renderForm();
+
+    fireEvent.change(screen.getByLabelText('Donation currency'), {
+      target: { value: 'USD' },
+    });
+    fireEvent.change(screen.getByLabelText(copy.chooseAmount, { selector: 'input' }), {
+      target: { value: '10' },
+    });
+
+    await waitFor(
+      () => {
+        expect(getFxQuote).toHaveBeenCalledWith(
+          'USD',
+          '10',
+          expect.any(AbortSignal),
+        );
+        expect(screen.getByText(/About Rs\. 2,500/)).toBeTruthy();
+      },
+      { timeout: 2000 },
+    );
+
+    fireEvent.click(screen.getByRole('link', { name: copy.sendSlip }));
+
+    await waitFor(() => {
+      expect(createDonation).toHaveBeenCalledWith('zahira-college-land-fund', {
+        amount: '10',
+        currency: 'USD',
+      });
+    });
+    await waitFor(() => {
+      const url = decodeURIComponent(openedLinks[0]);
+      expect(url).toContain('USD 10.00 (≈ Rs. 2,500)');
       expect(url).toContain('Ref: ZCLF-ABC23');
     });
   });

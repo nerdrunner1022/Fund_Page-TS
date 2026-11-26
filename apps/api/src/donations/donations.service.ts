@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { metric } from '@vercel/functions';
 import { randomUUID } from 'node:crypto';
 import {
   DataSource,
@@ -14,8 +15,10 @@ import {
   type EntityManager,
   type FindOptionsWhere,
 } from 'typeorm';
-import { parseAmountToMinor } from '../common/money';
+import { minorToMajorString } from '../common/money';
 import { generateReferenceCode } from '../common/reference-code';
+import { FxService } from '../fx/fx.service';
+import type { FxQuote } from '../fx/fx.types';
 import { Campaign } from '../campaigns/entities/campaign.entity';
 import {
   TOTALS_CONNECTION,
@@ -37,6 +40,22 @@ const MAX_PAGE_SIZE = 50;
 const UNIQUE_VIOLATION = '23505';
 const TOTALS_CACHE_MS = 30_000;
 
+type DonationOperation =
+  | 'create'
+  | 'add_verified'
+  | 'confirm'
+  | 'decline'
+  | 'update'
+  | 'remove';
+type WriteOutcome = 'success' | 'error';
+
+function recordDonationWrite(
+  operation: DonationOperation,
+  outcome: WriteOutcome,
+): void {
+  metric('donations.write', 1, { operation, outcome });
+}
+
 @Injectable()
 export class DonationsService {
   private readonly totalsCache = new Map<
@@ -50,6 +69,7 @@ export class DonationsService {
     @InjectRepository(Campaign)
     private readonly campaigns: Repository<Campaign>,
     private readonly dataSource: DataSource,
+    private readonly fx: FxService,
     @Inject(TOTALS_CONNECTION)
     private readonly totalsConnection: TotalsConnection,
   ) {}
@@ -58,40 +78,52 @@ export class DonationsService {
     campaignSlug: string,
     dto: CreateDonationDto,
   ): Promise<PendingDonationResponse> {
-    const campaign = await this.findActiveCampaign(campaignSlug);
-    const amountMinor = parseAmountToMinor(dto.amount);
+    let outcome: WriteOutcome = 'error';
+    try {
+      const campaign = await this.findActiveCampaign(campaignSlug);
+      const quote = await this.fx.quote(dto.amount, dto.currency);
 
-    // A declaration never changes the campaign total: an admin verifies the
-    // bank slip and calls confirm() before any money is counted.
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const donation = this.donations.create({
-        id: randomUUID(),
-        campaignId: campaign.id,
-        referenceCode: generateReferenceCode(),
-        donorName: dto.donorName ?? null,
-        amountMinor: amountMinor.toString(),
-        message: dto.message ?? null,
-        status: 'pending',
-        confirmedAt: null,
-      });
-
-      try {
-        const saved = await this.donations.save(donation);
-        return {
-          id: saved.id,
-          referenceCode: saved.referenceCode,
-          amountMinor: String(saved.amountMinor),
-          donorName: saved.donorName,
+      // A declaration never changes the campaign total: an admin verifies the
+      // bank slip and calls confirm() before any money is counted.
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const donation = this.donations.create({
+          id: randomUUID(),
+          campaignId: campaign.id,
+          referenceCode: generateReferenceCode(),
+          donorName: dto.donorName ?? null,
+          amountMinor: quote.amountMinor,
+          currency: quote.currency,
+          sourceAmountMinor: quote.sourceAmountMinor,
+          fxRate: quote.rate,
+          message: dto.message ?? null,
           status: 'pending',
-          createdAt: saved.createdAt.toISOString(),
-        };
-      } catch (error: unknown) {
-        if (attempt < 2 && isUniqueViolation(error)) continue;
-        throw error;
-      }
-    }
+          confirmedAt: null,
+        });
 
-    throw new ConflictException('Could not create a donation reference.');
+        try {
+          const saved = await this.donations.save(donation);
+          outcome = 'success';
+          return {
+            id: saved.id,
+            referenceCode: saved.referenceCode,
+            amountMinor: String(saved.amountMinor),
+            currency: quote.currency,
+            sourceAmountMinor: quote.sourceAmountMinor,
+            fxRate: quote.rate,
+            donorName: saved.donorName,
+            status: 'pending',
+            createdAt: saved.createdAt.toISOString(),
+          };
+        } catch (error: unknown) {
+          if (attempt < 2 && isUniqueViolation(error)) continue;
+          throw error;
+        }
+      }
+
+      throw new ConflictException('Could not create a donation reference.');
+    } finally {
+      recordDonationWrite('create', outcome);
+    }
   }
 
   /** Adds a donation already seen on the bank statement or a WhatsApp slip. */
@@ -100,51 +132,61 @@ export class DonationsService {
     dto: AdminCreateDonationDto,
     adminEmail: string,
   ): Promise<AdminDonationResponse> {
-    const campaign = await this.findActiveCampaign(campaignSlug);
-    const amountMinor = parseAmountToMinor(dto.amount);
-
-    if (dto.bankRef) {
-      const duplicate = await this.donations.findOne({
-        where: { bankRef: dto.bankRef },
-      });
-      if (duplicate) {
-        throw new ConflictException('Bank reference has already been recorded.');
-      }
-    }
-
-    const donation = this.donations.create({
-      id: randomUUID(),
-      campaignId: campaign.id,
-      referenceCode: generateReferenceCode(),
-      donorName: dto.donorName ?? null,
-      amountMinor: amountMinor.toString(),
-      bankRef: dto.bankRef ?? null,
-      slipUrl: dto.slipUrl ?? null,
-      donatedOn: dto.donatedOn ?? null,
-      message: null,
-      status: 'confirmed',
-      confirmedAt: new Date(),
-      verifiedBy: adminEmail,
-    });
-
+    let outcome: WriteOutcome = 'error';
     try {
-      const saved = await this.dataSource.transaction(async (manager) => {
-        const row = await manager.save(Donation, donation);
-        await manager.increment(
-          Campaign,
-          { id: campaign.id },
-          'raisedMinor',
-          amountMinor.toString(),
-        );
-        return row;
-      });
-      this.totalsCache.clear();
-      return toAdminResponse(saved);
-    } catch (error: unknown) {
-      if (isUniqueViolation(error)) {
-        throw new ConflictException('Bank reference has already been recorded.');
+      const campaign = await this.findActiveCampaign(campaignSlug);
+      const quote = await this.fx.quote(dto.amount, dto.currency);
+      const amountMinor = BigInt(quote.amountMinor);
+
+      if (dto.bankRef) {
+        const duplicate = await this.donations.findOne({
+          where: { bankRef: dto.bankRef },
+        });
+        if (duplicate) {
+          throw new ConflictException('Bank reference has already been recorded.');
+        }
       }
-      throw error;
+
+      const donation = this.donations.create({
+        id: randomUUID(),
+        campaignId: campaign.id,
+        referenceCode: generateReferenceCode(),
+        donorName: dto.donorName ?? null,
+        amountMinor: amountMinor.toString(),
+        currency: quote.currency,
+        sourceAmountMinor: quote.sourceAmountMinor,
+        fxRate: quote.rate,
+        bankRef: dto.bankRef ?? null,
+        slipUrl: dto.slipUrl ?? null,
+        donatedOn: dto.donatedOn ?? null,
+        message: null,
+        status: 'confirmed',
+        confirmedAt: new Date(),
+        verifiedBy: adminEmail,
+      });
+
+      try {
+        const saved = await this.dataSource.transaction(async (manager) => {
+          const row = await manager.save(Donation, donation);
+          await manager.increment(
+            Campaign,
+            { id: campaign.id },
+            'raisedMinor',
+            amountMinor.toString(),
+          );
+          return row;
+        });
+        this.totalsCache.clear();
+        outcome = 'success';
+        return toAdminResponse(saved);
+      } catch (error: unknown) {
+        if (isUniqueViolation(error)) {
+          throw new ConflictException('Bank reference has already been recorded.');
+        }
+        throw error;
+      }
+    } finally {
+      recordDonationWrite('add_verified', outcome);
     }
   }
 
@@ -152,70 +194,82 @@ export class DonationsService {
     id: string,
     adminEmail: string,
   ): Promise<{ id: string; status: 'confirmed'; raisedMinor: string }> {
-    const result = await this.dataSource.transaction(async (manager) => {
-      const donation = await manager.findOne(Donation, { where: { id } });
-      if (!donation) {
-        throw new NotFoundException('Donation not found.');
-      }
-      if (donation.status !== 'pending') {
-        throw new ConflictException(
-          `Donation is already ${donation.status}; it cannot be verified again.`,
+    let outcome: WriteOutcome = 'error';
+    try {
+      const result = await this.dataSource.transaction(async (manager) => {
+        const donation = await manager.findOne(Donation, { where: { id } });
+        if (!donation) {
+          throw new NotFoundException('Donation not found.');
+        }
+        if (donation.status !== 'pending') {
+          throw new ConflictException(
+            `Donation is already ${donation.status}; it cannot be verified again.`,
+          );
+        }
+
+        const update = await manager.update(
+          Donation,
+          { id, status: 'pending' },
+          {
+            status: 'confirmed',
+            confirmedAt: new Date(),
+            verifiedBy: adminEmail,
+          },
         );
-      }
+        if (update.affected !== 1) {
+          throw new ConflictException('Donation was changed concurrently.');
+        }
 
-      const update = await manager.update(
-        Donation,
-        { id, status: 'pending' },
-        {
-          status: 'confirmed',
-          confirmedAt: new Date(),
-          verifiedBy: adminEmail,
-        },
-      );
-      if (update.affected !== 1) {
-        throw new ConflictException('Donation was changed concurrently.');
-      }
+        await manager.increment(
+          Campaign,
+          { id: donation.campaignId },
+          'raisedMinor',
+          donation.amountMinor,
+        );
 
-      await manager.increment(
-        Campaign,
-        { id: donation.campaignId },
-        'raisedMinor',
-        donation.amountMinor,
-      );
+        const campaign = await manager.findOne(Campaign, {
+          where: { id: donation.campaignId },
+        });
+        if (!campaign) {
+          throw new NotFoundException('Campaign not found.');
+        }
 
-      const campaign = await manager.findOne(Campaign, {
-        where: { id: donation.campaignId },
+        return {
+          id: donation.id,
+          status: 'confirmed' as const,
+          raisedMinor: String(campaign.raisedMinor),
+        };
       });
-      if (!campaign) {
-        throw new NotFoundException('Campaign not found.');
-      }
-
-      return {
-        id: donation.id,
-        status: 'confirmed' as const,
-        raisedMinor: String(campaign.raisedMinor),
-      };
-    });
-    this.totalsCache.clear();
-    return result;
+      this.totalsCache.clear();
+      outcome = 'success';
+      return result;
+    } finally {
+      recordDonationWrite('confirm', outcome);
+    }
   }
 
   async decline(
     id: string,
     adminEmail: string,
   ): Promise<{ id: string; status: 'declined' }> {
-    const update = await this.donations.update(
-      { id, status: 'pending' },
-      { status: 'declined', verifiedBy: adminEmail },
-    );
-    if (update.affected !== 1) {
-      const exists = await this.donations.exists({ where: { id } });
-      if (!exists) {
-        throw new NotFoundException('Donation not found.');
+    let outcome: WriteOutcome = 'error';
+    try {
+      const update = await this.donations.update(
+        { id, status: 'pending' },
+        { status: 'declined', verifiedBy: adminEmail },
+      );
+      if (update.affected !== 1) {
+        const exists = await this.donations.exists({ where: { id } });
+        if (!exists) {
+          throw new NotFoundException('Donation not found.');
+        }
+        throw new ConflictException('Only a pending donation can be rejected.');
       }
-      throw new ConflictException('Only a pending donation can be rejected.');
+      outcome = 'success';
+      return { id, status: 'declined' };
+    } finally {
+      recordDonationWrite('decline', outcome);
     }
-    return { id, status: 'declined' };
   }
 
   /** Edits a donation in place; any change to the counted value is applied to
@@ -225,109 +279,157 @@ export class DonationsService {
     dto: AdminUpdateDonationDto,
     adminEmail: string,
   ): Promise<AdminDonationResponse> {
+    let outcome: WriteOutcome = 'error';
     try {
-      const saved = await this.dataSource.transaction(async (manager) => {
-        const donation = await manager.findOne(Donation, { where: { id } });
-        if (!donation) {
-          throw new NotFoundException('Donation not found.');
-        }
-
-        if (dto.bankRef && dto.bankRef !== donation.bankRef) {
-          const duplicate = await manager.findOne(Donation, {
-            where: { bankRef: dto.bankRef },
-          });
-          if (duplicate && duplicate.id !== id) {
-            throw new ConflictException('Bank reference has already been recorded.');
-          }
-        }
-
-        const oldAmount = BigInt(donation.amountMinor);
-        const newAmount =
-          dto.amount === undefined ? oldAmount : parseAmountToMinor(dto.amount);
-        const oldStatus = donation.status;
-        const newStatus = dto.status ?? oldStatus;
-        const wasCounted = oldStatus === 'confirmed';
-        const isCounted = newStatus === 'confirmed';
-        const delta = (isCounted ? newAmount : 0n) - (wasCounted ? oldAmount : 0n);
-
-        const patch: Partial<Donation> = {
-          amountMinor: newAmount.toString(),
-          status: newStatus,
-          donorName:
-            dto.donorName === undefined
-              ? donation.donorName
-              : dto.donorName || null,
-          bankRef: dto.bankRef === undefined ? donation.bankRef : dto.bankRef || null,
-          slipUrl:
-            dto.slipUrl === undefined ? donation.slipUrl : dto.slipUrl || null,
-          donatedOn:
-            dto.donatedOn === undefined ? donation.donatedOn : dto.donatedOn || null,
-          message: dto.message === undefined ? donation.message : dto.message || null,
-          verifiedBy: adminEmail,
-          confirmedAt: isCounted
-            ? (donation.confirmedAt ?? new Date())
-            : null,
-        };
-
-        // Compare the old values too, so two concurrent edits cannot both
-        // succeed with stale totals.
-        const result = await manager.update(
-          Donation,
-          { id, status: oldStatus, amountMinor: donation.amountMinor },
-          patch,
-        );
-        if (result.affected !== 1) {
-          throw new ConflictException('Donation was changed concurrently.');
-        }
-
-        if (delta !== 0n) {
-          await adjustCampaignTotal(manager, donation.campaignId, delta);
-        }
-
-        const updated = await manager.findOne(Donation, { where: { id } });
-        if (!updated) {
-          throw new NotFoundException('Donation not found.');
-        }
-        return toAdminResponse(updated);
-      });
-      this.totalsCache.clear();
-      return saved;
-    } catch (error: unknown) {
-      if (isUniqueViolation(error)) {
-        throw new ConflictException('Bank reference has already been recorded.');
+      const current = await this.donations.findOne({ where: { id } });
+      if (!current) {
+        throw new NotFoundException('Donation not found.');
       }
-      throw error;
+
+      // Fetch rates before opening a transaction: an external call must not hold
+      // a database connection open.
+      let quote: FxQuote;
+      if (dto.amount === undefined && dto.currency === undefined) {
+        quote = {
+          currency: current.currency as FxQuote['currency'],
+          sourceAmountMinor: String(
+            current.sourceAmountMinor ?? current.amountMinor,
+          ),
+          amountMinor: String(current.amountMinor),
+          rate: current.fxRate ?? '1',
+        };
+      } else {
+        const sourceAmount =
+          dto.amount ??
+          minorToMajorString(String(current.sourceAmountMinor ?? current.amountMinor));
+        quote = await this.fx.quote(
+          sourceAmount,
+          dto.currency ?? (current.currency as FxQuote['currency']),
+        );
+      }
+
+      try {
+        const saved = await this.dataSource.transaction(async (manager) => {
+          const donation = await manager.findOne(Donation, { where: { id } });
+          if (!donation) {
+            throw new NotFoundException('Donation not found.');
+          }
+
+          if (dto.bankRef && dto.bankRef !== donation.bankRef) {
+            const duplicate = await manager.findOne(Donation, {
+              where: { bankRef: dto.bankRef },
+            });
+            if (duplicate && duplicate.id !== id) {
+              throw new ConflictException('Bank reference has already been recorded.');
+            }
+          }
+
+          const oldAmount = BigInt(donation.amountMinor);
+          const newAmount = BigInt(quote.amountMinor);
+          const oldStatus = donation.status;
+          const newStatus = dto.status ?? oldStatus;
+          const wasCounted = oldStatus === 'confirmed';
+          const isCounted = newStatus === 'confirmed';
+          const delta = (isCounted ? newAmount : 0n) - (wasCounted ? oldAmount : 0n);
+
+          const patch: Partial<Donation> = {
+            amountMinor: quote.amountMinor,
+            currency: quote.currency,
+            sourceAmountMinor: quote.sourceAmountMinor,
+            fxRate: quote.rate,
+            status: newStatus,
+            donorName:
+              dto.donorName === undefined
+                ? donation.donorName
+                : dto.donorName || null,
+            bankRef: dto.bankRef === undefined ? donation.bankRef : dto.bankRef || null,
+            slipUrl:
+              dto.slipUrl === undefined ? donation.slipUrl : dto.slipUrl || null,
+            donatedOn:
+              dto.donatedOn === undefined ? donation.donatedOn : dto.donatedOn || null,
+            message: dto.message === undefined ? donation.message : dto.message || null,
+            verifiedBy: adminEmail,
+            confirmedAt: isCounted
+              ? (donation.confirmedAt ?? new Date())
+              : null,
+          };
+
+          // Compare the old values too, so two concurrent edits cannot both
+          // succeed with stale totals.
+          const result = await manager.update(
+            Donation,
+            {
+              id,
+              status: oldStatus,
+              amountMinor: donation.amountMinor,
+              currency: donation.currency,
+              sourceAmountMinor: donation.sourceAmountMinor,
+              fxRate: donation.fxRate,
+            },
+            patch,
+          );
+          if (result.affected !== 1) {
+            throw new ConflictException('Donation was changed concurrently.');
+          }
+
+          if (delta !== 0n) {
+            await adjustCampaignTotal(manager, donation.campaignId, delta);
+          }
+
+          const updated = await manager.findOne(Donation, { where: { id } });
+          if (!updated) {
+            throw new NotFoundException('Donation not found.');
+          }
+          return toAdminResponse(updated);
+        });
+        this.totalsCache.clear();
+        outcome = 'success';
+        return saved;
+      } catch (error: unknown) {
+        if (isUniqueViolation(error)) {
+          throw new ConflictException('Bank reference has already been recorded.');
+        }
+        throw error;
+      }
+    } finally {
+      recordDonationWrite('update', outcome);
     }
   }
 
   /** Removes a donation and reverses its contribution to the campaign total. */
   async remove(id: string): Promise<{ id: string; status: DonationStatus }> {
-    const removed = await this.dataSource.transaction(async (manager) => {
-      const donation = await manager.findOne(Donation, { where: { id } });
-      if (!donation) {
-        throw new NotFoundException('Donation not found.');
-      }
+    let outcome: WriteOutcome = 'error';
+    try {
+      const removed = await this.dataSource.transaction(async (manager) => {
+        const donation = await manager.findOne(Donation, { where: { id } });
+        if (!donation) {
+          throw new NotFoundException('Donation not found.');
+        }
 
-      const result = await manager.delete(Donation, {
-        id,
-        status: donation.status,
-        amountMinor: donation.amountMinor,
+        const result = await manager.delete(Donation, {
+          id,
+          status: donation.status,
+          amountMinor: donation.amountMinor,
+        });
+        if (result.affected !== 1) {
+          throw new ConflictException('Donation was changed concurrently.');
+        }
+
+        if (donation.status === 'confirmed') {
+          await adjustCampaignTotal(
+            manager,
+            donation.campaignId,
+            -BigInt(donation.amountMinor),
+          );
+        }
+        return { id, status: donation.status };
       });
-      if (result.affected !== 1) {
-        throw new ConflictException('Donation was changed concurrently.');
-      }
-
-      if (donation.status === 'confirmed') {
-        await adjustCampaignTotal(
-          manager,
-          donation.campaignId,
-          -BigInt(donation.amountMinor),
-        );
-      }
-      return { id, status: donation.status };
-    });
-    this.totalsCache.clear();
-    return removed;
+      this.totalsCache.clear();
+      outcome = 'success';
+      return removed;
+    } finally {
+      recordDonationWrite('remove', outcome);
+    }
   }
 
   async listPending(options: {
@@ -458,6 +560,9 @@ function toAdminResponse(row: Donation): AdminDonationResponse {
     referenceCode: row.referenceCode,
     donorName: row.donorName,
     amountMinor: String(row.amountMinor),
+    currency: (row.currency ?? 'LKR') as AdminDonationResponse['currency'],
+    sourceAmountMinor: String(row.sourceAmountMinor ?? row.amountMinor),
+    fxRate: row.fxRate ?? '1',
     bankRef: row.bankRef,
     slipUrl: row.slipUrl,
     donatedOn: toDateString(row.donatedOn),

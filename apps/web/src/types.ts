@@ -1,5 +1,22 @@
 export type Lang = 'en' | 'ta';
 
+export const SUPPORTED_CURRENCIES = [
+  'LKR',
+  'USD',
+  'GBP',
+  'EUR',
+  'AED',
+  'SAR',
+  'QAR',
+  'CAD',
+  'AUD',
+  'INR',
+  'MYR',
+  'SGD',
+] as const;
+
+export type SupportedCurrency = (typeof SUPPORTED_CURRENCIES)[number];
+
 export interface CampaignCopy {
   school: string;
   title: string;
@@ -26,6 +43,7 @@ export interface CampaignCopy {
   whatsappNote: string;
   message: string;
   supporters: string;
+  supportersSecondary: string;
 }
 
 export interface Campaign {
@@ -45,9 +63,23 @@ export interface PendingDonation {
   id: string;
   referenceCode: string;
   amountMinor: string;
+  currency: SupportedCurrency;
+  sourceAmountMinor: string;
+  fxRate: string;
   donorName: string | null;
   status: 'pending';
   createdAt: string;
+}
+
+export interface FxQuote {
+  currency: SupportedCurrency;
+  sourceAmountMinor: string;
+  amountMinor: string;
+  rate: string;
+}
+
+export interface FxCurrenciesResponse {
+  currencies: SupportedCurrency[];
 }
 
 /** The only donation data exposed publicly: no names, slips or bank refs. */
@@ -63,6 +95,9 @@ export interface AdminDonation {
   referenceCode: string;
   donorName: string | null;
   amountMinor: string;
+  currency: SupportedCurrency;
+  sourceAmountMinor: string;
+  fxRate: string;
   bankRef: string | null;
   slipUrl: string | null;
   donatedOn: string | null;
